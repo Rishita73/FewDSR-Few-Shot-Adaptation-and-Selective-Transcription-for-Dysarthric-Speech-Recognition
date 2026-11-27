@@ -1,0 +1,17 @@
+numpy>=1.26
+scipy>=1.11
+pandas>=2.0
+matplotlib>=3.8
+python-docx>=1.1        # Part 3: report generator
+streamlit>=1.35
+# --- Part 2 (real model) ---
+torch>=2.2
+torchaudio>=2.2
+transformers>=4.40      # needs generate(output_logits=True)
+peft>=0.10
+soundfile>=0.12
+librosa>=0.10
+jiwer>=3.0              # cross-check only; core/metrics.py is the source of truth
+# --- Part 3 (edge) ---
+ctranslate2>=4.0
+faster-whisper>=1.0

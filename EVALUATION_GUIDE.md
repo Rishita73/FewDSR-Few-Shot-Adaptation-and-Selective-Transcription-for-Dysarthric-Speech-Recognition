@@ -1,55 +1,56 @@
-# FewDSR: Evaluator Presentation Script & Viva Defense Guide
+# FewDSR: Evaluator Presentation Script & Live Demo Guide
 
-### Department of Computer Science & Engineering
 **Veer Madho Singh Bhandari Uttarakhand Technical University (UTU), Dehradun**  
-**Design Project Mid-Term Evaluation (40% Milestone)**  
+**Design Project Mid-Term Evaluation (40% Running Module)**  
 **Students:** Rishita Bhandari (`230000101080`) & Radhika Negi (`230000101076`)  
 **Guide:** Dr. Shailesh Panwar
 
 ---
 
-## 🎯 3-Minute Presentation Walkthrough Script
+## 🎯 How to Present Your Live 40% Working Prototype (3-Minute Script)
 
-### 1. Introduction (30 seconds)
-> "Good morning/afternoon respected evaluators. Our design project is titled **FewDSR: Confidence-Calibrated Few-Shot Adaptation and Selective Transcription for Dysarthric Speech Recognition** under the guidance of Dr. Shailesh Panwar.
-> Standard ASR systems like OpenAI Whisper assume fluent speech. For individuals with motor-speech impairments like cerebral palsy, ALS, and Parkinson's, Word Error Rates deteriorate catastrophically from 5% to over 60%. Furthermore, during typical breathing pauses, autoregressive models hallucinate wildly.
-> Our project introduces a 4-stage edge-compatible architecture that solves this without requiring exhausting recording sessions from the patient."
+### Step 1: Explain What Is Running Live (20 seconds)
+> "Respected Evaluators, our project is **FewDSR: Confidence-Calibrated Few-Shot Adaptation and Selective Transcription for Dysarthric Speech Recognition**.  
+> Today we are demonstrating our **live 40% running module** powered by **OpenAI Whisper-Base running locally on CPU** with our custom **PyTorch Cross-Attention LoRA adapters**, **600ms Pause-Preserving VAD**, **Acoustic-Null Hallucination Guard**, and **Selective Transcription**."
 
-### 2. Live Running Module Demo (90 seconds)
-> *(Open Streamlit on screen: `python -m streamlit run app.py`)*
-> 
-> 1. **Show the Hindi Assistive Speech Case (The Local Relevance Feature):**
->    - Select `🇮🇳 Hindi Assistive Case (Post-Stroke / Parkinson's Speech)`.
->    - Target Text: *"कृपया डॉक्टर को बुलाओ मुझे दवा चाहिए"*
->    - Point to the clinical card: *"In India, post-stroke and Parkinson's patients lose the breath support needed for aspirated Hindi consonants (महाप्राण: ख, घ, छ, झ, ठ, थ, फ). During the 2.1-second breathing pause, multilingual Whisper hallucinates random internet text ('थैंक यू फॉर वाचिंग सब्सक्राइब...') with 85.7% WER. FewDSR's Acoustic-Null check suppresses the hallucination, and selective transcription highlights the uncertain verb [UNCERTAIN: बुलाओ] while correctly transcribing the emergency request."*
-> 
-> 2. **Show the Real Clinical Recording (Authentic Clinical Audio):**
->    - Select `🏥 Real Clinical Recording (Spastic Dysarthria in ALS)`.
->    - Play the audio: *"This is a genuine clinical recording of an ALS patient exhibiting spastic dysarthria with severe vocal cord hypertonicity and strained-strangled phonation. Whisper achieves 53.8% WER, whereas FewDSR normalizes spastic acoustic strain down to 7.7% WER."*
-> 
-> 3. **Show Stage 1 (Pause-Preserving VAD):**
->    - Select `TORGO M01 (Moderate Dysarthria - Cerebral Palsy)`.
->    - Point to the waveform: *"Notice the blue highlighted region. Standard VAD truncates dysarthric speech because it interprets breathing pauses as silence. Our 600ms hangover window preserves speech continuity intact."*
-> 
-> 4. **The Showstopper (Hallucination Guard):**
->    - Switch to `Breathing Pause Case (Hallucination Trigger)`.
->    - *"Notice this 2.2-second respiratory pause. Standard Whisper hallucinates: 'Thank you for watching and please subscribe to my channel' with 150% WER! In FewDSR, our Acoustic-Null Grounding Check checks whether $\Delta = z(w) - z(\text{nospeech}) \ge \gamma$. Because the evidence is below threshold, it immediately suppresses the hallucination, giving 0% WER."*
-> 
-> 5. **Show Selective Abstention:**
->    - *"Instead of guessing blindly on ambiguous sounds, low-confidence words are highlighted as `[UNCERTAIN: word]` for safety in assistive communication."*
+### Step 2: Live ASR & Calibration Demo — Tab 1 (60 seconds)
+1. Pick **"🇮🇳 Hindi Assistive Case"** or **"🏥 Real Clinical Recording (Spastic Dysarthria in ALS)"** (or click **"🎤 Record Live Microphone"** and speak slowly with a 2-second pause!).
+2. Show the **Stage 1 VAD Waveform**: *"Standard VAD cuts off dysarthric breathing pauses. Our 600ms hangover window preserves the breathing interval."*
+3. Show the **Side-by-Side Comparison**:
+   - **Left:** Uncalibrated Whisper Baseline.
+   - **Right:** FewDSR Pipeline with real token-level `[UNCERTAIN: word]` badges.
+4. Expand **"🔍 Inspect Real Token Logits"**:
+   - Point out the **real logits** $z(w)$ and `<|nospeech|>` logits extracted directly from Whisper's decoder!
+   - Show how $\Delta = z(w) - z(\text{nospeech})$ catches ungrounded silence hallucinations and how Temperature Scaling ($T = 1.35$) calibrates overconfident probabilities.
 
-### 3. Conclusion & Next 60% Roadmap (30 seconds)
-> "This concludes our 40% functional milestone covering Phase 1 and Phase 2. For the remaining 60%, we will perform complete Leave-One-Speaker-Out cross-validation across all 15 TORGO speakers and compile the model via CTranslate2 INT8 quantization for real-time offline CPU deployment."
+### Step 3: Live Few-Shot Cross-Attention LoRA Training — Tab 2 (45 seconds)
+1. Switch to **Tab 2: "🧠 2. Live Few-Shot LoRA Training (Stage 2)"**.
+2. Point out the live PyTorch parameter count: **>99.7% of Whisper is frozen**, and only the **decoder cross-attention `q_proj` & `v_proj` LoRA matrices** are trainable.
+3. Click **"⚡ Run Live Few-Shot LoRA Calibration"**:
+   - Evaluators will watch the **real PyTorch Cross-Entropy Loss curve drop live** in ~3 seconds on CPU!
+
+### Step 4: What We Built (40%) vs What We Will Do Next (60%) — Tab 3 (30 seconds)
+1. Switch to **Tab 3: "🗺️ 3. Project Status: 40% Done vs Next 60%"**.
+2. Walk evaluators through:
+   - **Completed (40%):** All 4 pipeline stages working end-to-end on CPU, live LoRA adapter, logit extraction, Hindi & clinical test cases.
+   - **Next 60%:** Full 15-speaker TORGO Leave-One-Speaker-Out (LOSO) evaluation, validation-learned $T^*$ & $\gamma^*$ optimization, CTranslate2 INT8 quantization, and final IEEE paper + thesis.
 
 ---
 
-## 💡 Top Viva Questions & Precise Technical Answers
+## 💡 Top 5 Evaluator Viva Questions & Quick Answers
 
-### Q1: What makes your LoRA approach "Few-Shot"?
-**Answer:** "Conventional fine-tuning updates all 244 million parameters and demands dozens of hours of patient speech, which is clinically impractical due to vocal fatigue. In FewDSR, we freeze 99.98% of the model and adapt only the decoder cross-attention projections ($r=8, \alpha=16$). Cross-attention specifically governs the acoustic-to-text alignment, enabling rapid adaptation on only 5 to 20 calibration sentences."
+1. **Q: Is this using an external cloud API or token like OpenAI / Google API?**
+   - **Answer:** *"No sir/ma'am. It does not use any cloud API or paid tokens. We have downloaded and compiled OpenAI Whisper-Base locally onto our laptop. The inference and PyTorch backpropagation run 100% locally and offline on CPU."*
 
-### Q2: Why temperature scaling instead of training a separate classifier?
-**Answer:** "Temperature scaling ($P = \text{softmax}(z/T)$) is post-hoc and non-parametric. It preserves the rank-order of token predictions while directly reducing the Expected Calibration Error (ECE) from 0.28 to 0.08, preventing the decoder from making overconfident false assertions."
+2. **Q: Why LoRA on Cross-Attention specifically, instead of full fine-tuning?**
+   - **Answer:** *"Full fine-tuning on 1–5 dysarthric utterances causes catastrophic forgetting and degrades general language modeling. Furthermore, dysarthria alters the mapping between acoustic features and phonetic targets, which happens at the encoder-decoder cross-attention interface ($Q$ from decoder, $K, V$ from audio encoder). LoRA adds low-rank matrices to $Q$ and $V$, adapting only 0.135% (98k) parameters in ~3 seconds on CPU."*
 
-### Q3: How is this tested on consumer hardware?
-**Answer:** "Whisper-Small adapted with INT8 quantization operates with a Real-Time Factor (RTF) of ~0.08 on standard laptop CPUs (Intel Core i5 / AMD Ryzen), requiring zero cloud API calls or external GPU hardware."
+3. **Q: What is the Acoustic-Null Margin check?**
+   - **Answer:** *"Standard Whisper hallucinates fluent phrases during prolonged dysarthric pauses. We extract the logit for the special token `<|nospeech|>` alongside candidate token $w$. If the margin $\Delta = z(w) - z(\text{nospeech})$ is below our safety threshold $\gamma$, the token is suppressed as ungrounded silence hallucination."*
+
+4. **Q: Why do you need Temperature Scaling?**
+   - **Answer:** *"Modern neural networks produce overconfident probabilities (softmax $P \approx 0.99$ even when wrong). By applying temperature parameter $T > 1.0$ ($P = \text{softmax}(z/T)$), we soften the logits, bringing confidence in line with true empirical accuracy without changing token rank."*
+
+5. **Q: What is Selective Transcription?**
+   - **Answer:** *"In medical and assistive contexts, an incorrect word can lead to dangerous actions (e.g. wrong medicine dosage). Instead of forcing an ungrounded guess, our system outputs `[UNCERTAIN: word]` when calibrated confidence is below $\tau = 0.65$, preserving safety while maintaining high coverage."*
+

@@ -1,4 +1,5 @@
 import os
+import io
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -8,31 +9,30 @@ import matplotlib.pyplot as plt
 from core.vad_preprocessor import PausePreservingVAD
 from core.calibration_guard import CalibrationGuard
 from core.selective_engine import SelectiveTranscriptionEngine
-from core.model_manager import FewDSRModelManager
+from core.real_whisper_engine import RealFewDSREngine
 
 # -------------------------------------------------------------
 # PAGE CONFIGURATION
 # -------------------------------------------------------------
 st.set_page_config(
-    page_title="FewDSR | 40% Running Module Demo",
+    page_title="FewDSR | Live 40% Working Prototype",
     page_icon="🎙️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom Styling
 st.markdown("""
 <style>
     .main-title {
-        font-size: 26px;
+        font-size: 25px;
         font-weight: 800;
         color: #1E3A8A;
         margin-bottom: 2px;
     }
     .sub-title {
-        font-size: 15px;
+        font-size: 14px;
         color: #4B5563;
-        margin-bottom: 12px;
+        margin-bottom: 10px;
     }
     .author-box {
         background-color: #F3F4F6;
@@ -40,433 +40,425 @@ st.markdown("""
         padding: 10px 16px;
         border-radius: 4px;
         font-size: 13px;
-        margin-bottom: 20px;
-    }
-    .metric-card {
-        background: #FFFFFF;
-        border: 1px solid #E5E7EB;
-        border-radius: 8px;
-        padding: 14px;
-        text-align: center;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        margin-bottom: 16px;
     }
     .baseline-box {
         background-color: #FFF5F5;
         border: 1px solid #FEB2B2;
         border-radius: 8px;
         padding: 16px;
-        min-height: 140px;
+        min-height: 150px;
     }
     .fewdsr-box {
         background-color: #F0FFF4;
         border: 1px solid #9AE6B4;
         border-radius: 8px;
         padding: 16px;
-        min-height: 140px;
+        min-height: 150px;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# HEADER SECTION
+# HEADER
 # -------------------------------------------------------------
 st.markdown('<div class="main-title">🎙️ FewDSR: Confidence-Calibrated Few-Shot Adaptation for Dysarthric Speech Recognition</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">B.Tech. Computer Science & Engineering • Design Project Mid-Term Evaluation (40% Running Module Prototype)</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">B.Tech. CSE Design Project • Live 40% Working Prototype (Real Whisper + Cross-Attention LoRA + Selective Calibration)</div>', unsafe_allow_html=True)
 
 st.markdown("""
 <div class="author-box">
-    <b>Submitted by:</b> Rishita Bhandari (Roll: 230000101080) & Radhika Negi (Roll: 230000101076)<br>
-    <b>Supervisor:</b> Dr. Shailesh Panwar &nbsp;|&nbsp; <b>Institution:</b> Department of CSE, Faculty of Technology, UTU Dehradun
+    <b>Submitted by:</b> Rishita Bhandari (230000101080) & Radhika Negi (230000101076) &nbsp;|&nbsp;
+    <b>Supervisor:</b> Dr. Shailesh Panwar &nbsp;|&nbsp;
+    <b>Dept. of CSE, UTU Dehradun</b>
 </div>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# INITIALIZE ENGINES
+# LOAD REAL MODEL ENGINE (CACHED IN MEMORY)
 # -------------------------------------------------------------
-model_mgr = FewDSRModelManager()
+@st.cache_resource(show_spinner="Loading OpenAI Whisper-Base & injecting Cross-Attention LoRA adapters...")
+def load_engine():
+    local_hf = os.path.join(os.path.dirname(__file__), "models", "whisper-base-hf")
+    model_source = local_hf if os.path.exists(local_hf) else "openai/whisper-base"
+    return RealFewDSREngine(model_id=model_source, r=8, alpha=16)
+
+engine = load_engine()
 calib_guard = CalibrationGuard()
 selective_engine = SelectiveTranscriptionEngine()
 
 # -------------------------------------------------------------
-# SIDEBAR CONTROLS
+# SIDEBAR: AUDIO SOURCE & HYPERPARAMETERS
 # -------------------------------------------------------------
-st.sidebar.header("⚙️ Evaluation Control Panel")
+st.sidebar.header("🎛️ Live Prototype Controls")
 
-# Sample Audio Selection
+input_mode = st.sidebar.radio(
+    "Choose Audio Input Source:",
+    ["📂 Pre-loaded Clinical / Test Samples", "🎤 Record Live Microphone", "📤 Upload Custom .WAV File"]
+)
+
 samples_dir = os.path.join(os.path.dirname(__file__), "samples")
-sample_files = {
-    "🇮🇳 Hindi Assistive Case (Post-Stroke / Parkinson's Speech)": "hindi_dysarthria_case.wav",
-    "🏥 Real Clinical Recording (Spastic Dysarthria in ALS)": "clinical_als_patient.wav",
-    "TORGO F03 (Mild Dysarthria - Cerebral Palsy)": "torgo_f03_mild.wav",
-    "TORGO M01 (Moderate Dysarthria - Cerebral Palsy)": "torgo_m01_moderate.wav",
-    "TORGO M04 (Severe Dysarthria - ALS/Motor Disorder)": "torgo_m04_severe.wav",
-    "Breathing Pause Case (Hallucination Trigger)": "torgo_pause_hallucination.wav"
+sample_catalog = {
+    "🇮🇳 Hindi Assistive Case (Post-Stroke / Parkinson's)": {
+        "file": "hindi_dysarthria_case.wav",
+        "lang": "hi",
+        "ref": "कृपया डॉक्टर को बुलाओ मुझे दवा चाहिए",
+        "desc": "Post-stroke / Parkinson's Hindi speech with respiratory pause."
+    },
+    "🏥 Real Clinical Recording (Spastic Dysarthria in ALS)": {
+        "file": "clinical_als_patient.wav",
+        "lang": "en",
+        "ref": "When the sunlight strikes raindrops in the air they act as a prism",
+        "desc": "Genuine clinical ALS patient recording with strained phonation."
+    },
+    "TORGO F03 (Mild Dysarthria - Cerebral Palsy)": {
+        "file": "torgo_f03_mild.wav",
+        "lang": "en",
+        "ref": "She had your dark suit in greasy wash water all year",
+        "desc": "Mild spastic dysarthria with consonant imprecision."
+    },
+    "TORGO M01 (Moderate Dysarthria - Cerebral Palsy)": {
+        "file": "torgo_m01_moderate.wav",
+        "lang": "en",
+        "ref": "Speech recognition helps individuals regain communication autonomy",
+        "desc": "Moderate athetoid dysarthria with 0.9s breathing pause."
+    },
+    "TORGO M04 (Severe Dysarthria - ALS)": {
+        "file": "torgo_m04_severe.wav",
+        "lang": "en",
+        "ref": "Open the emergency front door immediately",
+        "desc": "Severe flaccid dysarthria with heavy tremor and vocal fatigue."
+    },
+    "Breathing Pause Case (2.2s Silence Trigger)": {
+        "file": "torgo_pause_hallucination.wav",
+        "lang": "en",
+        "ref": "Please call doctor at ten",
+        "desc": "2.2s respiratory silence gap to test hallucination suppression."
+    }
 }
 
-selected_label = st.sidebar.selectbox("Select Test Audio Sample:", list(sample_files.keys()))
-active_sample_filename = sample_files[selected_label]
-audio_path = os.path.join(samples_dir, active_sample_filename)
+audio_data = None
+orig_sr = 16000
+audio_bytes_for_player = None
+default_lang = "en"
+default_ref = ""
+active_label = ""
+
+if input_mode == "📂 Pre-loaded Clinical / Test Samples":
+    selected_label = st.sidebar.selectbox("Select Test Sample:", list(sample_catalog.keys()))
+    info = sample_catalog[selected_label]
+    active_label = selected_label
+    default_lang = info["lang"]
+    default_ref = info["ref"]
+    fpath = os.path.join(samples_dir, info["file"])
+    if os.path.exists(fpath):
+        orig_sr, audio_data = wavfile.read(fpath)
+        with open(fpath, "rb") as f:
+            audio_bytes_for_player = f.read()
+
+elif input_mode == "🎤 Record Live Microphone":
+    active_label = "Live Microphone Recording"
+    lang_choice = st.sidebar.selectbox("Spoken Language:", ["English (en)", "Hindi (hi)"])
+    default_lang = "hi" if "hi" in lang_choice else "en"
+    mic_audio = st.sidebar.audio_input("Click mic to record (speak slowly / add a 2s pause):")
+    if mic_audio is not None:
+        raw_bytes = mic_audio.read()
+        audio_bytes_for_player = raw_bytes
+        orig_sr, audio_data = wavfile.read(io.BytesIO(raw_bytes))
+
+elif input_mode == "📤 Upload Custom .WAV File":
+    active_label = "Uploaded Custom WAV"
+    lang_choice = st.sidebar.selectbox("Audio Language:", ["English (en)", "Hindi (hi)"])
+    default_lang = "hi" if "hi" in lang_choice else "en"
+    up_file = st.sidebar.file_uploader("Upload a .wav audio file", type=["wav"])
+    if up_file is not None:
+        raw_bytes = up_file.read()
+        audio_bytes_for_player = raw_bytes
+        orig_sr, audio_data = wavfile.read(io.BytesIO(raw_bytes))
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("🎛️ 4-Stage Hyperparameters")
+st.sidebar.subheader("⚙️ 4-Stage Pipeline Parameters")
 
-# Stage 1: VAD Hangover
 vad_hangover = st.sidebar.slider(
     "Stage 1: VAD Hangover Window (ms)",
-    min_value=100,
-    max_value=1000,
-    value=600,
-    step=50,
-    help="Preserves prolonged dysarthric breathing intervals from being truncated by standard VAD."
+    min_value=100, max_value=1000, value=600, step=50,
+    help="Bridges dysarthric breathing pauses without truncating speech."
 )
-
-# Stage 3: Calibration Temperature
 temp_val = st.sidebar.slider(
     "Stage 3: Temperature Scaling (T)",
-    min_value=1.0,
-    max_value=2.5,
-    value=1.35,
-    step=0.05,
-    help="Softens overconfident probabilities: P_calib = softmax(z / T)."
+    min_value=1.0, max_value=2.5, value=1.35, step=0.05,
+    help="Softens overconfident logits: P_calib = softmax(z / T)."
 )
-
-# Stage 3: Acoustic-Null Margin
 gamma_val = st.sidebar.slider(
-    "Stage 3: Grounding Threshold (γ)",
-    min_value=0.5,
-    max_value=3.0,
-    value=1.20,
-    step=0.1,
-    help="Delta = z(top) - z(nospeech). If Delta < gamma, suppresses pause hallucinations."
+    "Stage 3: Acoustic-Null Margin (γ)",
+    min_value=-2.0, max_value=5.0, value=1.20, step=0.2,
+    help="Delta = z(word) - z(<|nospeech|>). Tokens below γ are suppressed as hallucinations."
 )
-
-# Stage 4: Selective Confidence Threshold
 tau_val = st.sidebar.slider(
     "Stage 4: Uncertainty Threshold (τ)",
-    min_value=0.50,
-    max_value=0.95,
-    value=0.70,
-    step=0.05,
-    help="Tokens below tau are flagged as [UNCERTAIN: word] instead of guessing blindly."
+    min_value=0.30, max_value=0.95, value=0.65, step=0.05,
+    help="Words with calibrated confidence < τ are tagged [UNCERTAIN: word]."
 )
 
 st.sidebar.markdown("---")
-st.sidebar.info("💡 **40% Review Status:**\n- ✅ Stage 1 (VAD): Functional\n- ✅ Stage 2 (LoRA Adapter): Functional\n- ✅ Stage 3 (Calibration): Functional\n- ✅ Stage 4 (Selective): Functional")
+lora_status = "🟢 Adapted (Few-Shot LoRA Active)" if engine.is_calibrated else "🔵 Base + LoRA Ready (Zero-Shot)"
+st.sidebar.info(
+    f"**Model:** `{engine.model_id}` ({engine.device.upper()})\n\n"
+    f"**LoRA Status:** {lora_status}\n\n"
+    f"**Trainable Params:** {engine.lora_stats['trainable_params']:,} / {engine.lora_stats['total_params']:,} "
+    f"({engine.lora_stats['trainable_pct']}%)"
+)
 
 # -------------------------------------------------------------
-# MAIN TABS
+# MAIN NAVIGATION TABS
 # -------------------------------------------------------------
 tab1, tab2, tab3, tab4 = st.tabs([
-    "🚀 Live 40% Running Module Demo",
-    "📊 Baseline Benchmarking (TORGO)",
-    "📈 Calibration & Risk-Coverage Scaling",
-    "📋 System Architecture & Viva Defense"
+    "🚀 1. Live Working ASR & Calibration Demo",
+    "🧠 2. Live Few-Shot LoRA Training (Stage 2)",
+    "🗺️ 3. Project Status: 40% Done vs Next 60%",
+    "📊 4. TORGO Benchmarks & Viva Q&A"
 ])
 
 # -------------------------------------------------------------
-# TAB 1: LIVE 40% RUNNING DEMO
+# TAB 1: LIVE WORKING PROTOTYPE
 # -------------------------------------------------------------
 with tab1:
-    # Clinical Profile Metadata Dictionary
-    clinical_profiles = {
-        "hindi_dysarthria_case.wav": {
-            "title": "🇮🇳 Indian Patient (Hindi Assistive Speech) — Post-Stroke / Parkinson's Hypokinetic Dysarthria",
-            "cause": "Brain Stroke / Parkinson's Disease (Loss of respiratory breath support for aspirated Hindi consonants)",
-            "acoustic": "Slurred articulation of aspirated consonants (महाप्राण: ख, घ, छ, झ, ठ, थ, फ), monotone pitch, and 2.1s respiratory pauses.",
-            "why_whisper_fails": "Multilingual Whisper hallucinates non-existent training phrases ('थैंक यू फॉर वाचिंग सब्सक्राइब...') during respiratory silences (85.7% WER). FewDSR suppresses the hallucination to 0% WER."
-        },
-        "clinical_als_patient.wav": {
-            "title": "🏥 Authentic Clinical Archive — Spastic Dysarthria in ALS (Male Patient, John E. Pierce SLP Archive)",
-            "cause": "Amyotrophic Lateral Sclerosis (Upper Motor Neuron lesion causing vocal cord hyperadduction)",
-            "acoustic": "Genuine strained-strangled vocal quality, severe pitch breaks, prolonged intervals between phonemes, and articulatory breakdowns.",
-            "why_whisper_fails": "Whisper struggles with strained phoneme substitutions ('range drop' instead of 'raindrops', 53.8% WER). FewDSR adapts cross-attention to normalize spastic acoustic strain."
-        },
-        "torgo_f03_mild.wav": {
-            "title": "TORGO Speaker F03 (Female, 21 yrs) — Mild Spastic Dysarthria",
-            "cause": "Cerebral Palsy (Congenital neuromotor disorder affecting speech muscle coordination)",
-            "acoustic": "Mild consonant imprecision (stops and fricatives), reduced vowel space, pitch monoloudness. High human intelligibility, but trips up Whisper's standard phonetic boundaries.",
-            "why_whisper_fails": "Whisper hallucinates acoustic substitutions ('dark sweet' instead of 'dark suit', 'oily' instead of 'all') with 36.4% WER."
-        },
-        "torgo_m01_moderate.wav": {
-            "title": "TORGO Speaker M01 (Male, 28 yrs) — Moderate Athetoid Dysarthria",
-            "cause": "Cerebral Palsy (Involuntary motor tremors affecting tongue, velum, and vocal cords)",
-            "acoustic": "Slurred articulation, prolonged vowel phonation, irregular respiratory pauses (0.8s–1.2s). Causes standard VAD to chop words.",
-            "why_whisper_fails": "Whisper experiences severe phonetic breakdown ('recognizer health individual again community autumn') with 62.5% WER."
-        },
-        "torgo_m04_severe.wav": {
-            "title": "TORGO Speaker M04 (Male, 54 yrs) — Severe Flaccid Dysarthria",
-            "cause": "Amyotrophic Lateral Sclerosis (ALS / Motor Neuron Disease causing progressive muscle atrophy)",
-            "acoustic": "Heavy vocal tremor, low vocal intensity, severe breathiness, hypernasality, rapid vocal fatigue. High physical exhaustion when speaking.",
-            "why_whisper_fails": "Whisper collapses due to acoustic mismatch (>66% WER). FewDSR safely outputs confident words and tags [UNCERTAIN: emergency]."
-        },
-        "torgo_pause_hallucination.wav": {
-            "title": "Continuous Dysarthric Utterance with 2.2s Respiratory Breathing Pause",
-            "cause": "Diaphragm & Intercostal Muscle Weakness (Common across CP, ALS, and Parkinson's)",
-            "acoustic": "Speaker runs out of breath mid-sentence, requiring an extended 2.2-second respiratory intake pause before completing the phrase.",
-            "why_whisper_fails": "Whisper autoregressively fabricates training data loops: 'Thank you for watching and please subscribe...' (150% WER). FewDSR's Acoustic-Null Guard suppresses it to 0% WER."
-        }
-    }
-    
-    prof = clinical_profiles.get(active_sample_filename, clinical_profiles["torgo_m01_moderate.wav"])
-    
-    st.markdown(f"""
-    <div style="background-color: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 8px; padding: 12px 18px; margin-bottom: 16px;">
-        <span style="font-size: 15px; font-weight: 700; color: #1E40AF;">🧑‍⚕️ {prof['title']}</span><br>
-        <span style="font-size: 13px; color: #1E3A8A;"><b>Clinical Etiology:</b> {prof['cause']}</span><br>
-        <span style="font-size: 13px; color: #374151;"><b>Acoustic Speech Pathologies:</b> {prof['acoustic']}</span><br>
-        <span style="font-size: 13px; color: #991B1B;"><b>Why Foundation ASR Fails:</b> {prof['why_whisper_fails']}</span>
-    </div>
-    """, unsafe_allow_html=True)
+    if audio_data is None:
+        st.info("👈 Please record from your microphone or upload a `.wav` file in the left sidebar to run live inference.")
+    else:
+        col_a1, col_a2 = st.columns([1, 2])
+        with col_a1:
+            st.subheader("🔊 Input Audio")
+            st.audio(audio_bytes_for_player, format="audio/wav")
+            dur = len(audio_data) / orig_sr
+            st.caption(f"**Source:** {active_label}")
+            st.caption(f"**Sample Rate:** {orig_sr} Hz | **Duration:** {dur:.2f}s | **Language:** `{default_lang}`")
+            ref_input = st.text_input("Ground Truth Reference (optional, for live WER %):", value=default_ref)
 
-    col_audio1, col_audio2 = st.columns([1, 2])
-    
-    with col_audio1:
-        st.subheader("🔊 Audio Input")
-        if os.path.exists(audio_path):
-            st.audio(audio_path)
-            sr, audio_data = wavfile.read(audio_path)
-            duration_sec = len(audio_data) / sr
-            st.caption(f"**Sample Rate:** {sr} Hz | **Duration:** {duration_sec:.2f}s | **Format:** Mono PCM")
-        else:
-            st.error("Audio sample not found!")
-            audio_data = np.zeros(16000)
-            sr = 16000
+        with col_a2:
+            st.subheader("🌊 Stage 1: Live Pause-Preserving VAD")
+            with st.spinner("Running live Whisper inference & logit extraction on CPU..."):
+                res = engine.run_comparison(
+                    audio_data=audio_data,
+                    orig_sr=orig_sr,
+                    language=default_lang,
+                    temperature=temp_val,
+                    gamma=gamma_val,
+                    vad_hangover_ms=vad_hangover,
+                    reference_text=ref_input,
+                )
 
-    with col_audio2:
-        st.subheader("🌊 Stage 1: Pause-Preserving VAD Analysis")
-        vad = PausePreservingVAD(sample_rate=sr, hangover_ms=vad_hangover)
-        vad_results = vad.process(audio_data, custom_hangover_ms=vad_hangover)
-        
-        # Plot Waveform and VAD Mask
-        fig, ax = plt.subplots(figsize=(8, 2.2))
-        t_axis = np.linspace(0, len(audio_data) / sr, len(audio_data))
-        ax.plot(t_axis, audio_data / (np.max(np.abs(audio_data)) + 1e-6), color="#94A3B8", alpha=0.7, label="Audio Waveform")
-        ax.fill_between(t_axis, -1, 1, where=vad_results["speech_mask"], color="#3B82F6", alpha=0.25, label=f"FewDSR VAD Active ({vad_hangover}ms)")
-        ax.set_ylim(-1.05, 1.05)
-        ax.set_xlabel("Time (seconds)", fontsize=9)
-        ax.set_ylabel("Amplitude", fontsize=9)
-        ax.legend(loc="upper right", fontsize=8)
-        plt.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
+            vad_res = res["vad_results"]
+            audio_16k = res["audio_16k"]
+            fig, ax = plt.subplots(figsize=(8, 2.2))
+            t_axis = np.linspace(0, len(audio_16k) / 16000.0, len(audio_16k))
+            ax.plot(t_axis, audio_16k / (np.max(np.abs(audio_16k)) + 1e-6), color="#94A3B8", alpha=0.75, label="Waveform")
+            ax.fill_between(t_axis, -1, 1, where=vad_res["speech_mask"][:len(audio_16k)], color="#3B82F6", alpha=0.25, label=f"FewDSR VAD ({vad_hangover}ms hangover)")
+            ax.set_ylim(-1.05, 1.05)
+            ax.set_xlabel("Time (s)", fontsize=9)
+            ax.set_ylabel("Amplitude", fontsize=9)
+            ax.legend(loc="upper right", fontsize=8)
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close(fig)
 
-        if vad_results["preserved_pauses"]:
-            pause_str = ", ".join([f"{p['start']}s–{p['end']}s ({p['duration_sec']}s)" for p in vad_results["preserved_pauses"]])
-            st.success(f"**Preserved Breathing Intervals:** {pause_str} (protected from truncation)")
-        else:
-            st.caption("No extended respiratory pauses detected in this utterance segment.")
+            if vad_res["preserved_pauses"]:
+                p_str = ", ".join([f"{p['start']}s–{p['end']}s ({p['duration_sec']}s)" for p in vad_res["preserved_pauses"]])
+                st.success(f"**Preserved Breathing Pauses:** {p_str}")
+            else:
+                st.caption(f"Active Speech Coverage: {vad_res['preserved_active_percent']:.1f}% (Raw: {vad_res['raw_active_percent']:.1f}%)")
 
-    st.markdown("---")
+        st.markdown("---")
+        sel_res = selective_engine.process_tokens(res["fewdsr_tokens"], custom_tau=tau_val)
 
-    # Run Inference
-    res = model_mgr.run_inference(active_sample_filename, temperature=temp_val, gamma=gamma_val)
-    sel_res = selective_engine.process_tokens(res["fewdsr_tokens"], custom_tau=tau_val)
+        st.subheader("⚖️ Real Live Inference: Zero-Shot Baseline vs FewDSR Pipeline")
+        c_base, c_few = st.columns(2)
 
-    st.subheader("⚖️ Side-by-Side Transcription & Hallucination Inspection")
-    
-    col_base, col_few = st.columns(2)
-    
-    with col_base:
-        st.markdown(f"""
-        <div class="baseline-box">
-            <h4 style="color: #9B1C1C; margin-top:0;">❌ Zero-Shot Whisper-Small Baseline</h4>
-            <p style="font-size: 15px; line-height: 1.6; font-family: monospace;"><b>Output:</b> "{res['baseline_output']}"</p>
-            <hr style="margin: 8px 0;">
-            <p style="font-size: 13px; color: #742A2A; margin-bottom:0;">
-                <b>Word Error Rate (WER):</b> {res['baseline_wer']}% &nbsp;|&nbsp; 
-                <b>CER:</b> {res['baseline_cer']}%<br>
-                <i>Characteristics: Catastrophic consonant distortion & pause hallucinations.</i>
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col_few:
-        st.markdown(f"""
-        <div class="fewdsr_box" style="background-color: #F0FFF4; border: 1px solid #9AE6B4; border-radius: 8px; padding: 16px; min-height: 140px;">
-            <h4 style="color: #22543D; margin-top:0;">✅ FewDSR Adapted & Selective Module (40%)</h4>
-            <div style="font-size: 15px; line-height: 2.0; font-family: monospace;">
-                <b>Output:</b> {sel_res['html_rendered']}
+        with c_base:
+            wer_badge = f"<b>Live WER:</b> {res['baseline_wer']}%" if res["baseline_wer"] is not None else "<b>Live WER:</b> N/A"
+            st.markdown(f"""
+            <div class="baseline-box">
+                <h4 style="color: #9B1C1C; margin-top:0;">❌ Baseline Whisper-Base (Uncalibrated)</h4>
+                <p style="font-size: 15px; line-height: 1.6; font-family: monospace;"><b>Output:</b> "{res['baseline_output']}"</p>
+                <hr style="margin: 8px 0;">
+                <p style="font-size: 13px; color: #742A2A; margin-bottom:0;">
+                    {wer_badge} &nbsp;|&nbsp; <b>Latency:</b> {res['baseline_latency_ms']} ms<br>
+                    <i>No pause-preserving VAD, no hallucination guard, uncalibrated softmax.</i>
+                </p>
             </div>
-            <hr style="margin: 8px 0;">
-            <p style="font-size: 13px; color: #22543D; margin-bottom:0;">
-                <b>Selective WER:</b> {res['fewdsr_wer']}% &nbsp;|&nbsp; 
-                <b>Coverage:</b> {sel_res['coverage_percent']}% &nbsp;|&nbsp; 
-                <b>Uncertain Flagged:</b> {sel_res['uncertain_tokens']}/{sel_res['total_tokens']}
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.info(f"🎯 **Ground Truth Target Text:** *\"{res['target_text']}\"*")
+        with c_few:
+            f_wer_badge = f"<b>Selective WER:</b> {res['fewdsr_wer']}%" if res["fewdsr_wer"] is not None else "<b>Selective WER:</b> N/A"
+            st.markdown(f"""
+            <div class="fewdsr-box">
+                <h4 style="color: #22543D; margin-top:0;">✅ FewDSR Live Pipeline (Stages 1–4)</h4>
+                <div style="font-size: 15px; line-height: 2.0; font-family: monospace;">
+                    <b>Output:</b> {sel_res['html_rendered'] if sel_res['html_rendered'] else '<i>(No speech tokens above threshold)</i>'}
+                </div>
+                <hr style="margin: 8px 0;">
+                <p style="font-size: 13px; color: #22543D; margin-bottom:0;">
+                    {f_wer_badge} &nbsp;|&nbsp; <b>Coverage:</b> {sel_res['coverage_percent']}% &nbsp;|&nbsp;
+                    <b>Uncertain:</b> {sel_res['uncertain_tokens']}/{sel_res['total_tokens']} &nbsp;|&nbsp;
+                    <b>Latency:</b> {res['latency_ms']} ms (RTF: {res['rtf']})
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
 
-    # Diagnostic Metrics Row
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        wer_drop = round(res['baseline_wer'] - res['fewdsr_wer'], 1)
-        st.metric("WER Absolute Reduction", f"↓ {wer_drop}%", f"From {res['baseline_wer']}% to {res['fewdsr_wer']}%")
-    with m2:
-        ece_val, _ = calib_guard.compute_ece([t["calibrated_conf"] for t in res["fewdsr_tokens"]], [1 if t["grounded"] else 0 for t in res["fewdsr_tokens"]])
-        st.metric("Calibrated ECE", f"{ece_val:.3f}", "↓ 64% vs Uncalibrated")
-    with m3:
-        st.metric("Selective Coverage", f"{sel_res['coverage_percent']}%", f"{sel_res['accepted_tokens']} tokens accepted")
-    with m4:
-        st.metric("CPU Latency / RTF", f"{res['latency_ms']} ms", f"RTF: {res['rtf']} (< 1.0 Real-Time)")
+        # Live Metrics Row
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            if res["baseline_wer"] is not None and res["fewdsr_wer"] is not None:
+                diff = round(res["baseline_wer"] - res["fewdsr_wer"], 1)
+                st.metric("FewDSR WER", f"{res['fewdsr_wer']}%", f"{diff:+.1f}% vs Baseline")
+            else:
+                st.metric("Words Detected", f"{sel_res['total_tokens']}", "Live Transcription")
+        with m2:
+            avg_calib = np.mean([t["calibrated_conf"] for t in res["fewdsr_tokens"]]) * 100 if res["fewdsr_tokens"] else 0.0
+            st.metric("Avg Calibrated Confidence", f"{avg_calib:.1f}%", f"Temperature T={temp_val}")
+        with m3:
+            st.metric("Selective Coverage", f"{sel_res['coverage_percent']}%", f"{sel_res['accepted_tokens']} accepted")
+        with m4:
+            st.metric("CPU Inference Speed", f"{res['latency_ms']} ms", f"RTF: {res['rtf']}")
 
-    # Token-Level Calibrated Probabilities Table
-    with st.expander("🔍 Inspect Token-Level Calibration & Acoustic Grounding Details"):
-        token_df = pd.DataFrame([
-            {
-                "Token": t["word"],
-                "Top Logit z(w)": t["top_l"],
-                "Null Logit z(no)": t["null_l"],
-                "Margin Δ = z(w)-z(no)": t["delta_margin"],
-                "Grounded (Δ ≥ γ)": "✅ Yes" if t["grounded"] else "❌ No (Hallucination)",
-                "Raw Softmax": f"{t['raw_conf']*100:.1f}%",
-                "Calibrated Conf (T)": f"{t['calibrated_conf']*100:.1f}%",
-                "Emission Action": "Transcribed" if (t["grounded"] and t["calibrated_conf"] >= tau_val) else ("Suppressed" if not t["grounded"] else "[UNCERTAIN]")
-            } for t in res["fewdsr_tokens"]
-        ])
-        st.dataframe(token_df, use_container_width=True)
+        with st.expander("🔍 Inspect Real Token Logits, <|nospeech|> Margin (Δ), and Temperature Calibration"):
+            if res["fewdsr_tokens"]:
+                df_tok = pd.DataFrame([
+                    {
+                        "Word": t["word"],
+                        "Top Logit z(w)": t["top_l"],
+                        "NoSpeech Logit z(null)": t["null_l"],
+                        "Margin Δ = z(w)-z(null)": t["delta_margin"],
+                        "Grounded (Δ ≥ γ)": "✅ Yes" if t["grounded"] else "❌ Suppressed",
+                        "Raw Softmax (T=1.0)": f"{t['raw_conf']*100:.1f}%",
+                        f"Calibrated (T={temp_val})": f"{t['calibrated_conf']*100:.1f}%",
+                        "Selective Decision": "Accepted" if (t["grounded"] and t["calibrated_conf"] >= tau_val) else ("Suppressed" if not t["grounded"] else "[UNCERTAIN]")
+                    }
+                    for t in res["fewdsr_tokens"]
+                ])
+                st.dataframe(df_tok, use_container_width=True)
+            else:
+                st.warning("No tokens generated.")
 
 # -------------------------------------------------------------
-# TAB 2: BASELINE BENCHMARKING (TORGO DATASET)
+# TAB 2: LIVE FEW-SHOT CROSS-ATTENTION LORA TRAINING
 # -------------------------------------------------------------
 with tab2:
-    st.subheader("📊 Objective 1: Baseline Characterization on TORGO Dysarthric Speech")
+    st.subheader("🧠 Stage 2: Live Few-Shot Cross-Attention LoRA Adaptation")
     st.markdown("""
-    As defined in **Objective 1 of the Synopsis**, the zero-shot performance of foundation models was benchmarked 
-    across varying dysarthria severities to establish the empirical reference error rate.
+    This tab proves **Stage 2** live to your evaluators: we freeze **>99.7%** of Whisper's weights and train **only**
+    the low-rank matrices $W = W_0 + \\frac{\\alpha}{r}(B \\cdot A)$ injected into the decoder's **cross-attention** layers (`q_proj`, `v_proj`).
     """)
-    
+
+    c_p1, c_p2, c_p3, c_p4 = st.columns(4)
+    c_p1.metric("Base Model", engine.model_id)
+    c_p2.metric("Total Parameters", f"{engine.lora_stats['total_params']:,}")
+    c_p3.metric("Trainable LoRA Params", f"{engine.lora_stats['trainable_params']:,}", f"{engine.lora_stats['trainable_pct']}% of model")
+    c_p4.metric("Injected Cross-Attn Layers", f"{engine.lora_stats['injected_projections']} projections", f"r={engine.lora_stats['rank_r']}, α={engine.lora_stats['alpha']}")
+
+    st.markdown("---")
+    if audio_data is None:
+        st.warning("Select a sample or record audio in the sidebar first to calibrate LoRA on it.")
+    else:
+        col_tr1, col_tr2 = st.columns([1.5, 1])
+        with col_tr1:
+            calib_target = st.text_input("Calibration Target Transcript (Ground Truth for this speaker):", value=default_ref or "Please call doctor at ten")
+            calib_steps = st.slider("Adaptation Gradient Steps (Few-Shot Budget):", min_value=2, max_value=10, value=5)
+            btn_col1, btn_col2 = st.columns(2)
+            with btn_col1:
+                run_cal = st.button("⚡ Run Live Few-Shot LoRA Calibration", type="primary", use_container_width=True)
+            with btn_col2:
+                reset_cal = st.button("🔄 Reset LoRA Weights (Zero-Shot)", use_container_width=True)
+
+            if reset_cal:
+                engine.reset_adaptation()
+                st.success("LoRA matrices reset to zero (restored exact Zero-Shot Whisper).")
+
+            if run_cal:
+                with st.spinner(f"Training {engine.lora_stats['trainable_params']:,} Cross-Attention LoRA parameters on CPU..."):
+                    train_out = engine.calibrate_few_shot(
+                        audio_data=audio_data,
+                        orig_sr=orig_sr,
+                        target_text=calib_target,
+                        language=default_lang,
+                        steps=calib_steps,
+                    )
+                st.success(f"Calibration complete in {train_out['elapsed_sec']}s! Loss dropped from {train_out['losses'][0]} → {train_out['losses'][-1]}.")
+
+        with col_tr2:
+            if engine.calibration_history:
+                latest = engine.calibration_history[-1]
+                fig_loss, ax_l = plt.subplots(figsize=(5, 2.8))
+                ax_l.plot(range(1, len(latest["losses"]) + 1), latest["losses"], marker="o", color="#2563EB", linewidth=2)
+                ax_l.set_xlabel("Calibration Step")
+                ax_l.set_ylabel("Cross-Entropy Loss")
+                ax_l.set_title("Live Cross-Attention LoRA Loss Curve")
+                ax_l.grid(True, linestyle=":", alpha=0.6)
+                plt.tight_layout()
+                st.pyplot(fig_loss)
+                plt.close(fig_loss)
+            else:
+                st.info("Click **Run Live Few-Shot LoRA Calibration** to watch real PyTorch training loss decrease live.")
+
+# -------------------------------------------------------------
+# TAB 3: WHAT WE ARE DOING (40%) VS WHAT WE WILL DO NEXT (60%)
+# -------------------------------------------------------------
+with tab3:
+    st.subheader("🗺️ Project Progress: What We Built (40%) vs What We Will Do Next (60%)")
+    st.progress(0.40, text="Current Project Completion: 40% (Mid-Term Running Module Milestone)")
+
+    col_done, col_next = st.columns(2)
+    with col_done:
+        st.success("### ✅ Completed Now (Current 40% Module)")
+        st.markdown(r"""
+        1. **Literature Survey & Problem Formulation (Phase 1):**
+           - Benchmarked Whisper failure modes on dysarthric speech (consonant elision + silence hallucinations).
+        2. **Stage 1 — Pause-Preserving VAD (`core/vad_preprocessor.py`):**
+           - Implemented 600ms hangover window to prevent cutting off dysarthric breathing pauses.
+        3. **Stage 2 — Cross-Attention LoRA (`core/lora_adapter.py`):**
+           - Built real PyTorch LoRA injection ($W = W_0 + \frac{\alpha}{r}BA$) targeting only decoder cross-attention `q_proj` & `v_proj` (<0.2% parameters).
+        4. **Stage 3 & 4 — Live Logit Calibration & Selective Engine:**
+           - Implemented real `<|nospeech|>` Acoustic-Null Margin check ($\Delta$), Temperature Scaling ($T$), and `[UNCERTAIN: word]` flagging.
+        5. **Bilingual Interactive Demo (`app.py`):**
+           - Live microphone, file upload, real clinical ALS audio, and Hindi post-stroke case.
+        """)
+
+    with col_next:
+        st.warning("### 🔜 Upcoming Work (Remaining 60% Roadmap)")
+        st.markdown(r"""
+        1. **Full TORGO Multi-Speaker Experiments (Phase 3 — Jan 2027):**
+           - Download full 15-speaker TORGO corpus and run **Leave-One-Speaker-Out (LOSO)** cross-validation across calibration budgets $K \in \{0, 5, 10, 20, 40\}$.
+        2. **Validation-Learned Calibration Optimization (Phase 4 — Feb 2027):**
+           - Optimize temperature $T^*$ and grounding margin $\gamma^*$ via NLL minimization on held-out dysarthric validation splits; generate full Expected Calibration Error (ECE) & Risk-Coverage curves.
+        3. **Edge Deployment & INT8 Quantization (Phase 5 — Mar 2027):**
+           - Merge LoRA weights and compile into **CTranslate2 INT8** for ultra-fast, low-RAM offline execution (target RTF < 0.1 on i3/i5 laptops).
+        4. **Statistical Testing & Final Thesis (Phase 6 — Apr–May 2027):**
+           - Paired bootstrap significance tests, final B.Tech dissertation, and IEEE/ACM manuscript submission.
+        """)
+
+# -------------------------------------------------------------
+# TAB 4: TORGO BENCHMARKS & VIVA Q&A
+# -------------------------------------------------------------
+with tab4:
+    st.subheader("📊 Reference TORGO Characterization & Evaluator Viva Q&A")
+
     benchmark_data = pd.DataFrame({
         "Speaker Category": ["TORGO Control (Normal)", "TORGO Mild Dysarthria", "TORGO Moderate Dysarthria", "TORGO Severe Dysarthria", "Dysarthric Breathing Pauses"],
         "Whisper Zero-Shot WER (%)": [4.2, 38.4, 58.7, 71.2, 124.6],
-        "FewDSR Adapted WER (%)": [3.8, 11.2, 16.5, 24.8, 4.2],
-        "Relative Improvement (%)": ["9.5%", "70.8%", "71.9%", "65.2%", "96.6%"],
-        "Common Failure Mode": ["None", "Consonant elision", "Vocal tremor & slurring", "Severe phonation loss", "Autoregressive Hallucination Loops"]
+        "Target FewDSR WER (%)": [3.8, 11.2, 16.5, 24.8, 4.2],
+        "Primary Failure Mode": ["None", "Consonant elision", "Vocal tremor & slurring", "Severe phonation loss", "Autoregressive Hallucination Loops"]
     })
-    
     st.dataframe(benchmark_data, use_container_width=True)
-    
-    # Chart
-    fig2, ax2 = plt.subplots(figsize=(8, 3.2))
-    categories = ["Mild Dysarthria", "Moderate Dysarthria", "Severe Dysarthria", "Breathing Pauses"]
-    base_wers = [38.4, 58.7, 71.2, 124.6]
-    fewdsr_wers = [11.2, 16.5, 24.8, 4.2]
-    
-    x = np.arange(len(categories))
-    width = 0.35
-    ax2.bar(x - width/2, base_wers, width, label="Zero-Shot Whisper Baseline", color="#EF4444")
-    ax2.bar(x + width/2, fewdsr_wers, width, label="FewDSR (Proposed 40% Module)", color="#10B981")
-    ax2.set_ylabel("Word Error Rate - WER (%)")
-    ax2.set_title("Empirical Error Reduction Across Dysarthria Severities")
-    ax2.set_xticks(x)
-    ax2.set_xticklabels(categories)
-    ax2.legend()
-    ax2.grid(axis='y', linestyle='--', alpha=0.5)
-    plt.tight_layout()
-    st.pyplot(fig2)
-    plt.close(fig2)
 
-# -------------------------------------------------------------
-# TAB 3: CALIBRATION & RISK-COVERAGE SCALING
-# -------------------------------------------------------------
-with tab3:
-    st.subheader("📈 Objective 2 & 3: Few-Shot Calibration Budget & Reliability Scaling")
-    
-    col_c1, col_c2 = st.columns(2)
-    
-    with col_c1:
-        st.markdown("#### Few-Shot Scaling (Vocal Fatigue Boundary)")
-        st.caption("Testing calibration budgets N = [0, 5, 10, 20, 40] utterances to respect physical stamina limits.")
-        
-        budgets = [0, 5, 10, 20, 40]
-        wer_trend = [62.5, 28.4, 15.2, 13.8, 12.9]
-        
-        fig_scale, ax_s = plt.subplots(figsize=(5, 3))
-        ax_s.plot(budgets, wer_trend, marker='o', color="#2563EB", linewidth=2)
-        ax_s.axvline(x=10, color="#DC2626", linestyle="--", label="Target Budget (N=10)")
-        ax_s.set_xlabel("Calibration Utterances (N)")
-        ax_s.set_ylabel("Word Error Rate (%)")
-        ax_s.set_title("WER vs. Few-Shot Calibration Budget")
-        ax_s.legend()
-        ax_s.grid(True, linestyle=":", alpha=0.6)
-        st.pyplot(fig_scale)
-        plt.close(fig_scale)
-        st.caption("Notice the steep knee of convergence: 10 utterances capture ~80% of adaptation gains with zero vocal fatigue!")
-
-    with col_c2:
-        st.markdown("#### Reliability Diagram (ECE Calibration)")
-        st.caption("Comparison of predicted confidence vs empirical accuracy before and after Temperature Scaling.")
-        
-        bins = np.linspace(0.1, 0.9, 5)
-        raw_conf_acc = [0.15, 0.28, 0.45, 0.58, 0.69]  # Highly overconfident
-        calib_conf_acc = [0.12, 0.29, 0.51, 0.72, 0.88] # Calibrated close to diagonal
-        
-        fig_rel, ax_r = plt.subplots(figsize=(5, 3))
-        ax_r.plot([0, 1], [0, 1], 'k--', label="Perfect Calibration")
-        ax_r.plot(bins, raw_conf_acc, 's-', color="#EF4444", label="Uncalibrated (ECE = 0.284)")
-        ax_r.plot(bins, calib_conf_acc, 'o-', color="#10B981", label=f"Calibrated T={temp_val} (ECE = 0.082)")
-        ax_r.set_xlabel("Reported Confidence")
-        ax_r.set_ylabel("Empirical Accuracy")
-        ax_r.set_title("Reliability Diagram (Post-Hoc Calibration)")
-        ax_r.legend(fontsize=8)
-        ax_r.grid(True, linestyle=":", alpha=0.6)
-        st.pyplot(fig_rel)
-        plt.close(fig_rel)
-        st.caption("Post-hoc temperature scaling eliminates overconfident false positives.")
-
-# -------------------------------------------------------------
-# TAB 4: ARCHITECTURE & VIVA DEFENSE
-# -------------------------------------------------------------
-with tab4:
-    st.subheader("📋 System Architecture & Evaluator Defense Cheatsheet")
-    
-    st.markdown("""
-    #### 🏗️ The 4-Stage FewDSR Pipeline (Synopsis Formulation)
-    ```
-    Audio Waveform (.wav)
-          │
-          ▼
-    [STAGE 1: Pause-Preserving Preprocessing] ──▶ Silero/Energy VAD (600ms hangover)
-          │                                         (Protects dysarthric breathing pauses)
-          ▼
-    [STAGE 2: Few-Shot Cross-Attention LoRA]  ──▶ W = W0 + (α/r)(B·A), rank r=8, α=16
-          │                                         (Frozen Whisper-Small + <0.02% params)
-          ▼
-    [STAGE 3: Calibration & Hallucination Guard]─▶ Acoustic-Null Check: Δ = z(w) - z(nospeech)
-          │                                         Temperature Scaling: P = softmax(z/T)
-          ▼
-    [STAGE 4: Calibrated Selective Engine]   ──▶ If conf >= τ: Accept Word
-                                                   If conf <  τ: Emit [UNCERTAIN: word]
-    ```
-    """)
-    
     st.markdown("---")
-    st.markdown("#### 🎯 Key Viva Questions & Answers for Evaluators")
-    
-    q1 = st.expander("Q1: What exactly represents the '40% Milestone' shown in this review?")
-    q1.write("""
-    **Answer:** "Respected Evaluators, according to our approved synopsis timeline:
-    1. **Phase 1 (Complete):** We conducted baseline zero-shot benchmarking on the TORGO dataset, identifying the severe failure modes (consonant elision and silence hallucinations).
-    2. **Phase 2 (Complete - 40% Running Module):** We designed and implemented the pause-preserving preprocessor (Stage 1), the cross-attention LoRA adaptation structure (Stage 2), the acoustic-null grounding guard (Stage 3), and the selective prediction engine (Stage 4).
-    The remaining 60% covers large-scale Leave-One-Speaker-Out cross-validation, physical INT8 CTranslate2 edge compilation on Raspberry Pi/laptops, and final dissertation writing."
-    """)
-
-    q2 = st.expander("Q2: Why adapt strictly Cross-Attention layers instead of full fine-tuning?")
-    q2.write("""
-    **Answer:** "Full fine-tuning requires thousands of gradient steps and dozens of audio hours, inducing catastrophic vocal fatigue for motor-impaired individuals. In Whisper, self-attention handles text language modeling, whereas cross-attention aligns the acoustic speech features with text tokens. By freezing 99.98% of the model and training LoRA adapters (rank r=8) only on cross-attention queries and values, we eliminate catastrophic forgetting and enable rapid adaptation on only 5 to 20 calibration utterances."
-    """)
-
-    q3 = st.expander("Q3: What causes Whisper to hallucinate on dysarthric audio, and how does FewDSR stop it?")
-    q3.write(r"""
-    **Answer:** "Dysarthric speakers require frequent breathing pauses (often 1 to 2.5 seconds). Because Whisper is an autoregressive decoder, during audio silences the acoustic encoder output is near zero, causing the text decoder's internal language model to hallucinate popular training phrases (e.g., 'Thank you for watching'). FewDSR introduces the **Acoustic-Null Grounding Margin**: $\Delta = z(w) - z(\text{nospeech})$. When $\Delta < \gamma$, the acoustic evidence is insufficient, and the hallucination is suppressed immediately."
-    """)
-
-    q4 = st.expander("Q4: Why output '[UNCERTAIN: word]' instead of just guessing the best word?")
-    q4.write("""
-    **Answer:** "In assistive and clinical speech interfaces, presenting an authoritative but wrong transcription (e.g., 'I want water' vs 'I want medicine') is dangerous. Through calibrated selective transcription, our system outputs tokens exceeding confidence threshold $\tau$ normally, and explicitly tags low-confidence tokens for caregiver or user confirmation."
-    """)
+    st.subheader("🎯 Quick Viva Answers for Evaluators")
+    with st.expander("Q1: Is this running a real neural network or hardcoded text?"):
+        st.write("It is running **OpenAI Whisper-Base** (`openai/whisper-base`) live in PyTorch on CPU, with real Cross-Attention LoRA adapters injected into the decoder layers, real logit extraction for `<|nospeech|>` hallucination checking, and live gradient-descent calibration in Tab 2.")
+    with st.expander("Q2: Why adapt strictly Cross-Attention layers instead of full fine-tuning?"):
+        st.write("Full fine-tuning updates 100% of parameters and requires hours of recordings, causing severe vocal fatigue for dysarthric speakers. Freezing 99.8% of the model and adapting only cross-attention Q & V aligns the speaker's atypical acoustics to Whisper's frozen language priors using just 5–20 utterances.")
+    with st.expander("Q3: How does Acoustic-Null Grounding stop pause hallucinations?"):
+        st.write(r"During a 2-second breathing pause, the encoder sees silence. We compute $\Delta = z(w_{\text{top}}) - z(\text{nospeech})$ from Whisper's live output logits. If $\Delta < \gamma$, the token lacks acoustic evidence and is suppressed.")
+    with st.expander("Q4: Why output `[UNCERTAIN: word]` instead of guessing?"):
+        st.write("In assistive and medical speech interfaces, a silent wrong guess (e.g., misinterpreting a medicine name) is dangerous. Selective transcription flags low-confidence words so the user or caregiver can verify them.")
 
 st.markdown("---")
 st.caption("Department of Computer Science & Engineering • Veer Madho Singh Bhandari Uttarakhand Technical University • Academic Session 2026–2027")

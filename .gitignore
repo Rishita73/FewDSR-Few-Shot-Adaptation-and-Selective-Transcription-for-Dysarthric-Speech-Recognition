@@ -1,0 +1,22 @@
+# Python cache & temporary files
+__pycache__/
+*.pyc
+~$*
+.venv/
+.pytest_cache/
+
+# Large neural network weights & checkpoints (exceeds GitHub 100MB limit)
+models/
+*.pt
+*.safetensors
+*.bin
+*.onnx
+
+# Large archives
+*.zip
+fewdsr.zip
+
+# Experiment outputs & local artifacts
+artifacts/
+results/raw/
+results/smoke/

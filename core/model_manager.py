@@ -184,3 +184,41 @@ class FewDSRModelManager:
             "latency_ms": latency_ms,
             "rtf": round(latency_ms / 3500.0, 3) # Real-Time Factor
         }
+
+
+import json
+import os
+from core.interfaces import ASRBackend, TokenInfo, Transcription
+
+_DEMO = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "simulated_demo.json")
+
+class SimulatedBackend(ASRBackend):
+    """Replays demo tokens for unit tests and legacy demo verification."""
+    name = "simulated-demo"
+    is_simulated = True
+
+    def __init__(self, path: str = _DEMO):
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                self.db = json.load(f)
+        else:
+            self.db = {}
+
+    def entry(self, filename: str) -> dict | None:
+        return self.db.get(os.path.basename(filename))
+
+    def transcribe_file(self, filename: str, audio_dur_s: float = 0.0) -> Transcription:
+        e = self.entry(filename)
+        if e is None:
+            raise KeyError(f"No simulated entry for {filename}.")
+        t0 = time.perf_counter()
+        toks = []
+        for d in e["fewdsr_tokens"]:
+            z = np.array([d["top_l"], d["top_l"] - 1.5, d["top_l"] - 2.5, d["top_l"] - 3.5, d["top_l"] - 4.5])
+            toks.append(TokenInfo(word=d["word"], topk_logits=z, null_logit=float(d["null_l"])))
+        return Transcription(tokens=toks, latency_s=time.perf_counter() - t0,
+                             audio_duration_s=audio_dur_s, backend=self.name, is_simulated=True)
+
+    def transcribe(self, audio: np.ndarray, sr: int) -> Transcription:
+        raise NotImplementedError("SimulatedBackend only supports bundled sample files; use transcribe_file().")
+
